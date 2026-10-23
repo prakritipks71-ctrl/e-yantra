@@ -54,103 +54,203 @@ STOP_SIGNAL = 'NV_stop'
 ############### ADD YOUR IMPLEMENTATION HERE #################
 ##############################################################
 
+# def detect_lane(frame):
+#     '''
+#     Purpose:
+#     ---
+#     Work out, from a single camera frame, how wrong the vehicle currently is -
+#     and hand back whatever `compute_control()` needs in order to correct it.
+
+#     This is your Task 1C detector, extended. Task 1C answered *where the lane
+#     centre is* and *which lane the vehicle is in*; a controller cannot use
+#     either of those directly. It needs to know how far the vehicle is from
+#     where it should be, and which way it is pointing.
+
+#     Input Arguments:
+#     ---
+#     `frame` :   [ numpy.ndarray ]
+#         One BGR frame from the vehicle's camera, of shape (height, width, 3),
+#         the right way up and in the right colour order.
+
+#     Returns:
+#     ---
+#     Anything you like - a tuple, a dictionary, your own class. Whatever you
+#     return here is passed straight to compute_control() and nowhere else, so
+#     the two functions only have to agree with each other.
+
+#     Example call:
+#     ---
+#     detection = detect_lane(frame)
+
+#     REMEMBER:
+#     ---
+#     Both lanes are driven during evaluation, and the arena looks mirrored from
+#     the other one. Do not hard-code which side the boundary is on.
+
+#     Do NOT call cv2.imshow() or cv2.imwrite() from inside this function.
+
+#     You are marked on how closely you hold the MIDDLE of your lane, not merely
+#     on staying the correct side of the dashed line.
+#     '''
+
+#     # ADD YOUR CODE HERE
+
+#     return None
+
+
+# def compute_control(detection, stop_requested):
+#     '''
+#     Purpose:
+#     ---
+#     Turn the errors from detect_lane() into the three numbers the vehicle is
+#     driven with, and obey the stop flag.
+
+#     This is where your Task 1B controller and your Task 1A steering geometry
+#     meet: work out one steering angle from the error, then split it into the
+#     two front-wheel angles the joints actually take.
+
+#     Input Arguments:
+#     ---
+#     `detection` :   [ any ]
+#         Whatever detect_lane() returned for this frame.
+
+#     `stop_requested` :  [ bool ]
+#         True while the evaluation is holding the vehicle at a stop point.
+#         This is a LEVEL, not a pulse: it stays True for the whole duration of
+#         the stop and goes False when the wait is over. While it is True the
+#         vehicle must be STATIONARY, so return a speed of 0.0. There is no
+#         stopwatch for you to write and no duration to hard-code.
+
+#     Returns:
+#     ---
+#     `left_angle`, `right_angle` :   [ float ]
+#         The two front-wheel steering angles, in RADIANS, written straight to
+#         the steering joints. The scene's steering joints are POSITIVE TO THE
+#         LEFT. Nothing is clamped for you - the vehicle's own limit is 45
+#         degrees, and commanding past it will not steer any harder.
+
+#     `speed` :   [ float ]
+#         Target velocity for both drive motors, in rad/s. 0.0 holds the
+#         vehicle still.
+
+#     Example call:
+#     ---
+#     left_angle, right_angle, speed = compute_control(detection, stop_requested)
+
+#     REMEMBER:
+#     ---
+#     Keep the loop running while stopped - set the SPEED to zero, not your
+#     program. If you stop reading frames you will not see the flag drop.
+
+#     Sooner or later a frame comes back with nothing usable in it. Holding the
+#     last steering angle, easing off the throttle and stopping dead are all
+#     defensible - doing nothing is not.
+#     '''
+
+#     # ADD YOUR CODE HERE
+
+#     return 0.0, 0.0, 0.0
+
+##############################################################
+############### ADD YOUR IMPLEMENTATION HERE #################
+##############################################################
+
 def detect_lane(frame):
     '''
     Purpose:
     ---
-    Work out, from a single camera frame, how wrong the vehicle currently is -
-    and hand back whatever `compute_control()` needs in order to correct it.
-
-    This is your Task 1C detector, extended. Task 1C answered *where the lane
-    centre is* and *which lane the vehicle is in*; a controller cannot use
-    either of those directly. It needs to know how far the vehicle is from
-    where it should be, and which way it is pointing.
-
-    Input Arguments:
-    ---
-    `frame` :   [ numpy.ndarray ]
-        One BGR frame from the vehicle's camera, of shape (height, width, 3),
-        the right way up and in the right colour order.
-
-    Returns:
-    ---
-    Anything you like - a tuple, a dictionary, your own class. Whatever you
-    return here is passed straight to compute_control() and nowhere else, so
-    the two functions only have to agree with each other.
-
-    Example call:
-    ---
-    detection = detect_lane(frame)
-
-    REMEMBER:
-    ---
-    Both lanes are driven during evaluation, and the arena looks mirrored from
-    the other one. Do not hard-code which side the boundary is on.
-
-    Do NOT call cv2.imshow() or cv2.imwrite() from inside this function.
-
-    You are marked on how closely you hold the MIDDLE of your lane, not merely
-    on staying the correct side of the dashed line.
+    Process a single camera frame to calculate cross-track error and heading error.
     '''
-
-    # ADD YOUR CODE HERE
-
-    return None
+    height, width = frame.shape[:2]
+    
+    # 1. Convert to HSV and isolate lane markings using your Task 1C thresholds
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    
+    # NOTE: Adjust these lower and upper bounds if needed based on your Task 1C tuner
+    lower_bound = np.array([0, 0, 200], dtype=np.uint8)   # Example white/bright lane threshold
+    upper_bound = np.array([180, 50, 255], dtype=np.uint8)
+    mask = cv2.inRange(hsv, lower_bound, upper_bound)
+    
+    # 2. Find lane pixels (e.g., using non-zero columns or contours at the bottom/middle of the view)
+    non_zero_x = np.where(mask > 0)[1]
+    
+    if len(non_zero_x) > 0:
+        lane_center_x = np.mean(non_zero_x)
+    else:
+        lane_center_x = width / 2.0  # Fallback to center if nothing is seen
+        
+    # 3. Calculate Cross-Track Error (distance from the center of the camera frame to the lane center)
+    frame_center_x = width / 2.0
+    cross_track_error = (lane_center_x - frame_center_x) / (width / 2.0)  # normalized value
+    
+    # 4. Calculate Heading Error (approximate slope/angle offset based on lane shift)
+    heading_error = 0.0  # Keep 0.0 if relying primarily on cross-track error, or add your line-fit slope here
+    
+    # Package into a dictionary to pass to compute_control()
+    detection = {
+        'cross_track_error': cross_track_error,
+        'heading_error': heading_error
+    }
+    
+    return detection
 
 
 def compute_control(detection, stop_requested):
     '''
     Purpose:
     ---
-    Turn the errors from detect_lane() into the three numbers the vehicle is
-    driven with, and obey the stop flag.
-
-    This is where your Task 1B controller and your Task 1A steering geometry
-    meet: work out one steering angle from the error, then split it into the
-    two front-wheel angles the joints actually take.
-
-    Input Arguments:
-    ---
-    `detection` :   [ any ]
-        Whatever detect_lane() returned for this frame.
-
-    `stop_requested` :  [ bool ]
-        True while the evaluation is holding the vehicle at a stop point.
-        This is a LEVEL, not a pulse: it stays True for the whole duration of
-        the stop and goes False when the wait is over. While it is True the
-        vehicle must be STATIONARY, so return a speed of 0.0. There is no
-        stopwatch for you to write and no duration to hard-code.
-
-    Returns:
-    ---
-    `left_angle`, `right_angle` :   [ float ]
-        The two front-wheel steering angles, in RADIANS, written straight to
-        the steering joints. The scene's steering joints are POSITIVE TO THE
-        LEFT. Nothing is clamped for you - the vehicle's own limit is 45
-        degrees, and commanding past it will not steer any harder.
-
-    `speed` :   [ float ]
-        Target velocity for both drive motors, in rad/s. 0.0 holds the
-        vehicle still.
-
-    Example call:
-    ---
-    left_angle, right_angle, speed = compute_control(detection, stop_requested)
-
-    REMEMBER:
-    ---
-    Keep the loop running while stopped - set the SPEED to zero, not your
-    program. If you stop reading frames you will not see the flag drop.
-
-    Sooner or later a frame comes back with nothing usable in it. Holding the
-    last steering angle, easing off the throttle and stopping dead are all
-    defensible - doing nothing is not.
+    Turn errors into steering angles using your controller and Ackermann geometry, 
+    and obey the stop flag.
     '''
+    if detection is None:
+        return 0.0, 0.0, 0.0
+        
+    e = detection.get('cross_track_error', 0.0)
+    psi = detection.get('heading_error', 0.0)
+    
+    # 1. TASK 1B CONTROLLER (Proportional / Stanley control law)
+    # Tune your gain K (e.g., try 0.5 to 1.5) to make the vehicle turn actively
+    K_p = 0.8
+    steering_angle = - (K_p * e + psi)  # Negative sign ensures correct steering direction
+    
+    # Clamp steering angle to vehicle physical limit (45 degrees / ~0.785 radians)
+    steering_angle = max(-0.785, min(0.785, steering_angle))
+    
+    # 2. TASK 1A ACKERMANN SPLIT
+    # Implement your geometry calculations here to convert single steering_angle into left and right wheels.
+    # Here is the direct geometric conversion using the vehicle constants:
+    # WHEELBASE = 0.120, TRACK_WIDTH = 0.110, WHEEL_OFFSET = 0.0275
+    if abs(steering_angle) < 1e-5:
+        left_angle = 0.0
+        right_angle = 0.0
+    else:
+        # Turning radius from virtual center
+        R = WHEELBASE / math.tan(abs(steering_angle))
+        if steering_angle > 0:  # Turning left
+            left_angle = math.atan(WHEELBASE / (R - TRACK_WIDTH / 2.0))
+            right_angle = math.atan(WHEELBASE / (R + TRACK_WIDTH / 2.0))
+        else:  # Turning right
+            left_angle = -math.atan(WHEELBASE / (R + TRACK_WIDTH / 2.0))
+            right_angle = -math.atan(WHEELBASE / (R - TRACK_WIDTH / 2.0))
+            
+    # 3. STOP RULE: If simulation tells you to stop, keep steering active but set speed to 0.0
+    if stop_requested:
+        return left_angle, right_angle, 0.0
+        
+    # 4. NORMAL DRIVE: Set cruise speed (e.g., 1.5 to 2.0 rad/s)
+    speed = 2.0
+    
+    return left_angle, right_angle, speed
 
-    # ADD YOUR CODE HERE
 
-    return 0.0, 0.0, 0.0
+# ------------------------------------------------------------------
+# Add any helper functions and global variables you need below this
+# comment, and keep them ABOVE the "END OF YOUR IMPLEMENTATION" line.
+# ------------------------------------------------------------------
 
+##############################################################
+############## END OF YOUR IMPLEMENTATION ####################
+##############################################################
 
 ##############################################################
 ############## END OF YOUR IMPLEMENTATION ####################
