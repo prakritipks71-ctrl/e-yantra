@@ -53,9 +53,9 @@ STOP_SIGNAL = 'NV_stop'
 ##############################################################
 ############### ADD YOUR IMPLEMENTATION HERE #################
 ##############################################################
-CURRENT_LANE = None
-LAST_ERROR = 0.0
-LAST_HEADING = 0.0
+LAST_WHITE_X = None
+LAST_WHITE_ERROR = 0.0
+LAST_WHITE_HEADING = 0.0
 
 def detect_lane(frame):
     '''
@@ -100,116 +100,81 @@ def detect_lane(frame):
     import cv2
     import numpy as np
 
-    global CURRENT_LANE, LAST_ERROR, LAST_HEADING
+    global LAST_WHITE_X, LAST_WHITE_ERROR, LAST_WHITE_HEADING
 
-    h, w = frame.shape[:2]
+    height, width = frame.shape[:2]
+
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
 
-    yellow = cv2.inRange(
-        hsv, np.array([15, 60, 80]), np.array([40, 255, 255])
-    )
-    white = cv2.inRange(
-        hsv, np.array([0, 0, 170]), np.array([180, 70, 255])
-    )
+    # Detect white road markings
+    lower_white = np.array([0, 0, 175], dtype=np.uint8)
+    upper_white = np.array([180, 75, 255], dtype=np.uint8)
+    mask = cv2.inRange(hsv, lower_white, upper_white)
 
-    def get_peaks(mask, y1, y2):
-        hist = np.sum(mask[y1:y2] > 0, axis=0).astype(np.float32)
-        hist = cv2.GaussianBlur(hist.reshape(1, -1), (1, 9), 0).flatten()
+    # Ignore the sky and focus on road markings
+    near_y1, near_y2 = int(height * 0.72), int(height * 0.94)
+    far_y1, far_y2 = int(height * 0.48), int(height * 0.68)
 
-        if hist.max() < 2:
-            return []
+    def find_line_x(y1, y2, reference=None):
+        roi = mask[y1:y2, :]
+        histogram = np.sum(roi > 0, axis=0).astype(np.float32)
 
-        xs = np.where(hist > max(2, hist.max() * 0.35))[0]
+        histogram = cv2.GaussianBlur(
+            histogram.reshape(1, -1), (1,  nine := 9), 0
+        ).ravel()
+
+        threshold = max(2, histogram.max() * 0.30)
+        xs = np.where(histogram >= threshold)[0]
+
         if len(xs) == 0:
-            return []
+            return None
 
-        groups = np.split(xs, np.where(np.diff(xs) > 15)[0] + 1)
-        return [float(np.mean(g)) for g in groups if len(g) > 0]
+        groups = np.split(xs, np.where(np.diff(xs) > max(8, width // 50))[0] + 1)
+        peaks = [
+            float(np.mean(group))
+            for group in groups
+            if len(group) >= 2
+        ]
 
-    # Detect markings close to the vehicle and farther ahead.
-    near_y1, near_y2 = int(h * 0.70), int(h * 0.94)
-    far_y1, far_y2 = int(h * 0.48), int(h * 0.68)
+        if not peaks:
+            return None
 
-    yn = get_peaks(yellow, near_y1, near_y2)
-    wn = get_peaks(white, near_y1, near_y2)
-    yf = get_peaks(yellow, far_y1, far_y2)
-    wf = get_peaks(white, far_y1, far_y2)
+        if reference is not None:
+            return min(peaks, key=lambda x: abs(x - reference))
 
-    if not yn or not wn:
+        # First frame: choose a visible marking near the camera centre
+        return min(peaks, key=lambda x: abs(x - width / 2))
+
+    near_x = find_line_x(near_y1, near_y2, LAST_WHITE_X)
+
+    if near_x is None:
         return {
-            "error": LAST_ERROR,
-            "heading": LAST_HEADING,
+            "cross_track_error": LAST_WHITE_ERROR,
+            "heading_error": LAST_WHITE_HEADING,
             "valid": False
         }
 
-    # Candidate lane centres are formed from yellow-white pairs.
-    candidates = []
-    for y in yn:
-        for d in wn:
-            gap = abs(y - d)
-            if w * 0.10 < gap < w * 0.60:
-                # Use the relative image position to label the pair.
-                lane = "left" if (y + d) / 2 < w / 2 else "right"
-                centre = (y + d) / 2
-                candidates.append((lane, centre, y, d))
+    far_x = find_line_x(far_y1, far_y2, near_x)
 
-    if not candidates:
-        return {
-            "error": LAST_ERROR,
-            "heading": LAST_HEADING,
-            "valid": False
-        }
+    if far_x is None:
+        far_x = near_x
 
-    # Lock the lane on the first frame with usable markings.
-    # The pair closest to the vehicle's image centre is the initial guess.
-    if CURRENT_LANE is None:
-        candidates.sort(key=lambda c: abs(c[1] - w / 2))
-        CURRENT_LANE = candidates[0][0]
+    # Error relative to the centre of the camera image
+    error = (near_x - width / 2) / (width / 2)
 
-    same_lane = [c for c in candidates if c[0] == CURRENT_LANE]
+    # Direction of the white line
+    heading = np.arctan2(
+        far_x - near_x,
+        (0.82 - 0.58) * height
+    )
 
-    # Never silently switch to the other lane if the selected lane disappears.
-    if not same_lane:
-        return {
-            "error": LAST_ERROR,
-            "heading": LAST_HEADING,
-            "valid": False
-        }
-
-    # Prefer the candidate closest to the previously tracked centre.
-    target = w / 2 + LAST_ERROR * (w / 2)
-    same_lane.sort(key=lambda c: abs(c[1] - target))
-    _, centre_near, _, _ = same_lane[0]
-
-    # Estimate the same lane centre farther ahead.
-    far_candidates = []
-    for y in yf:
-        for d in wf:
-            gap = abs(y - d)
-            if w * 0.10 < gap < w * 0.60:
-                lane = "left" if (y + d) / 2 < w / 2 else "right"
-                if lane == CURRENT_LANE:
-                    far_candidates.append((y + d) / 2)
-
-    if far_candidates:
-        centre_far = min(
-            far_candidates, key=lambda c: abs(c - centre_near)
-        )
-        heading = float(np.arctan2(
-            centre_far - centre_near,
-            (0.59 - 0.82) * h
-        ))
-    else:
-        heading = LAST_HEADING
-
-    error = (centre_near - w / 2) / (w / 2)
-
-    LAST_ERROR = float(error)
-    LAST_HEADING = float(heading)
+    LAST_WHITE_X = near_x
+    LAST_WHITE_ERROR = float(error)
+    LAST_WHITE_HEADING = float(heading)
 
     return {
-        "error": LAST_ERROR,
-        "heading": LAST_HEADING,
+        "cross_track_error": float(error),
+        "heading_error": float(heading),
         "valid": True
     }
 
@@ -269,43 +234,31 @@ def compute_control(detection, stop_requested):
     # ADD YOUR CODE HERE
     import math
 
-    if stop_requested:
-        return 0.0, 0.0, 0.0
-
-    if detection is None:
-        return 0.0, 0.0, 0.0
-
-    error = detection["error"]
-    heading = detection["heading"]
-
-    if not detection.get("valid", False):
-        # Slow down while using the last reliable lane estimate.
-        speed = 0.5
+    if detection is not None:
+        error = detection.get("cross_track_error", 0.0)
+        heading = detection.get("heading_error", 0.0)
+        valid = detection.get("valid", True)
     else:
-        speed = 1.0
+        error = LAST_WHITE_ERROR
+        heading = LAST_WHITE_HEADING
+        valid = False
 
-    # Positive steering means left.
-    steering = -0.45 * error - 1.0 * heading
+    # Keep steering responsive but smooth
+    steering = -0.25 * error - 0.65 * heading
+    steering = max(-math.radians(35),
+                   min(math.radians(35), steering))
 
-    limit = math.radians(45)
-    steering = max(-limit, min(limit, steering))
-
+    # Ackermann steering geometry
     wheelbase = 0.120
     track_width = 0.110
-    wheel_offset = 0.0275
-    half_track = track_width / 2 - wheel_offset
 
     if abs(steering) < 1e-5:
         left_angle = 0.0
         right_angle = 0.0
     else:
-        radius = wheelbase / abs(math.tan(steering))
-        inner = math.atan2(
-            wheelbase, max(0.01, radius - half_track)
-        )
-        outer = math.atan2(
-            wheelbase, radius + half_track
-        )
+        radius = wheelbase / math.tan(abs(steering))
+        inner = math.atan(wheelbase / max(0.001, radius - track_width / 2))
+        outer = math.atan(wheelbase / (radius + track_width / 2))
 
         if steering > 0:
             left_angle = inner
@@ -314,7 +267,13 @@ def compute_control(detection, stop_requested):
             left_angle = -outer
             right_angle = -inner
 
-    return float(left_angle), float(right_angle), speed
+    # The stop signal must always stop the vehicle
+    if stop_requested:
+        return float(left_angle), float(right_angle), 0.0
+
+    speed = 0.0 if not valid else 0.8
+
+    return float(left_angle), float(right_angle), float(speed)
     return 0.0, 0.0, 0.0
 
 
