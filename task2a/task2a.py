@@ -54,229 +54,222 @@ STOP_SIGNAL = 'NV_stop'
 ############### ADD YOUR IMPLEMENTATION HERE #################
 ##############################################################
 
-# def detect_lane(frame):
-#     '''
-#     Purpose:
-#     ---
-#     Work out, from a single camera frame, how wrong the vehicle currently is -
-#     and hand back whatever `compute_control()` needs in order to correct it.
-
-#     This is your Task 1C detector, extended. Task 1C answered *where the lane
-#     centre is* and *which lane the vehicle is in*; a controller cannot use
-#     either of those directly. It needs to know how far the vehicle is from
-#     where it should be, and which way it is pointing.
-
-#     Input Arguments:
-#     ---
-#     `frame` :   [ numpy.ndarray ]
-#         One BGR frame from the vehicle's camera, of shape (height, width, 3),
-#         the right way up and in the right colour order.
-
-#     Returns:
-#     ---
-#     Anything you like - a tuple, a dictionary, your own class. Whatever you
-#     return here is passed straight to compute_control() and nowhere else, so
-#     the two functions only have to agree with each other.
-
-#     Example call:
-#     ---
-#     detection = detect_lane(frame)
-
-#     REMEMBER:
-#     ---
-#     Both lanes are driven during evaluation, and the arena looks mirrored from
-#     the other one. Do not hard-code which side the boundary is on.
-
-#     Do NOT call cv2.imshow() or cv2.imwrite() from inside this function.
-
-#     You are marked on how closely you hold the MIDDLE of your lane, not merely
-#     on staying the correct side of the dashed line.
-#     '''
-
-#     # ADD YOUR CODE HERE
-
-#     return None
-
 def detect_lane(frame):
-    """Detect lane centre and road heading from the live camera frame."""
+    '''
+    Purpose:
+    ---
+    Work out, from a single camera frame, how wrong the vehicle currently is -
+    and hand back whatever `compute_control()` needs in order to correct it.
+
+    This is your Task 1C detector, extended. Task 1C answered *where the lane
+    centre is* and *which lane the vehicle is in*; a controller cannot use
+    either of those directly. It needs to know how far the vehicle is from
+    where it should be, and which way it is pointing.
+
+    Input Arguments:
+    ---
+    `frame` :   [ numpy.ndarray ]
+        One BGR frame from the vehicle's camera, of shape (height, width, 3),
+        the right way up and in the right colour order.
+
+    Returns:
+    ---
+    Anything you like - a tuple, a dictionary, your own class. Whatever you
+    return here is passed straight to compute_control() and nowhere else, so
+    the two functions only have to agree with each other.
+
+    Example call:
+    ---
+    detection = detect_lane(frame)
+
+    REMEMBER:
+    ---
+    Both lanes are driven during evaluation, and the arena looks mirrored from
+    the other one. Do not hard-code which side the boundary is on.
+
+    Do NOT call cv2.imshow() or cv2.imwrite() from inside this function.
+
+    You are marked on how closely you hold the MIDDLE of your lane, not merely
+    on staying the correct side of the dashed line.
+    '''
+
+    # ADD YOUR CODE HERE
+        import cv2
+    import numpy as np
+
     height, width = frame.shape[:2]
 
+    # Detect white and yellow lane markings
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
 
-    # Yellow divider markings and white road-edge markings.
-    yellow = cv2.inRange(
-        hsv, np.array([15, 65, 70], dtype=np.uint8),
-        np.array([40, 255, 255], dtype=np.uint8)
-    )
     white = cv2.inRange(
-        hsv, np.array([0, 0, 155], dtype=np.uint8),
-        np.array([180, 75, 255], dtype=np.uint8)
+        hsv,
+        np.array([0, 0, 150]),
+        np.array([180, 90, 255])
     )
 
-    mask = cv2.bitwise_or(yellow, white)
+    yellow = cv2.inRange(
+        hsv,
+        np.array([12, 50, 70]),
+        np.array([45, 255, 255])
+    )
 
-    # Remove small isolated noise without erasing thin markings.
-    kernel = np.ones((3, 3), np.uint8)
-    mask = cv2.morphologyEx(mask, cv2.MORPH_OPEN, kernel)
+    mask = cv2.bitwise_or(white, yellow)
 
-    def centre_at_row(y):
-        # Use a horizontal band rather than one noisy image row.
-        band_height = max(5, int(height * 0.035))
-        y1 = max(0, y - band_height)
-        y2 = min(height, y + band_height + 1)
+    # Focus on the lower part of the camera image
+    y1 = int(height * 0.55)
+    y2 = int(height * 0.90)
+    roi = mask[y1:y2, :]
 
-        histogram = np.sum(mask[y1:y2] > 0, axis=0).astype(float)
+    # Count lane-marking pixels in each column
+    histogram = np.sum(roi > 0, axis=0).astype(float)
 
-        # Smooth the histogram so one marking produces a stable peak.
-        histogram = np.convolve(
-            histogram, np.ones(9) / 9.0, mode="same"
+    # Smooth the histogram
+    histogram = np.convolve(
+        histogram, np.ones(11) / 11, mode="same"
+    )
+
+    # Find visible marking positions
+    threshold = max(2, histogram.max() * 0.25)
+    peaks = np.where(histogram > threshold)[0]
+
+    if len(peaks) == 0:
+        return {
+            "error": 0.0,
+            "heading": 0.0,
+            "valid": False
+        }
+
+    # Group nearby pixels into separate markings
+    groups = np.split(peaks, np.where(np.diff(peaks) > width * 0.04)[0] + 1)
+    centres = [
+        float(np.mean(group))
+        for group in groups
+        if len(group) > 0
+    ]
+
+    # Pick the two markings that best enclose the lane
+    pairs = []
+    for i in range(len(centres)):
+        for j in range(i + 1, len(centres)):
+            separation = centres[j] - centres[i]
+            if width * 0.15 < separation < width * 0.85:
+                pairs.append((abs((centres[i] + centres[j]) / 2 - width / 2),
+                              centres[i], centres[j]))
+
+    if pairs:
+        pairs.sort(key=lambda p: p[0])
+        _, left_mark, right_mark = pairs[0]
+        lane_centre = (left_mark + right_mark) / 2
+    else:
+        # Fallback: use the visible marking closest to the image centre
+        lane_centre = min(centres, key=lambda x: abs(x - width / 2))
+
+    error = (lane_centre - width / 2) / (width / 2)
+
+    # Estimate heading from a second, higher image region
+    upper_roi = mask[int(height * 0.35):int(height * 0.55), :]
+    upper_hist = np.sum(upper_roi > 0, axis=0).astype(float)
+
+    if upper_hist.max() > 0:
+        upper_x = float(np.argmax(upper_hist))
+        heading = np.arctan2(
+            upper_x - lane_centre,
+            height * 0.25
         )
-
-        if histogram.max() < 2:
-            return None
-
-        threshold = max(2.0, histogram.max() * 0.12)
-        peaks = [
-            x for x in range(1, width - 1)
-            if histogram[x] >= threshold
-            and histogram[x] >= histogram[x - 1]
-            and histogram[x] >= histogram[x + 1]
-        ]
-
-        # Merge peaks belonging to the same broad marking.
-        merged = []
-        for x in peaks:
-            if merged and x - merged[-1] < max(12, width // 40):
-                if histogram[x] > histogram[merged[-1]]:
-                    merged[-1] = x
-            else:
-                merged.append(x)
-
-        # Choose the plausible pair enclosing a lane.
-        pairs = []
-        for i in range(len(merged)):
-            for j in range(i + 1, len(merged)):
-                separation = merged[j] - merged[i]
-                if 0.12 * width <= separation <= 0.70 * width:
-                    midpoint = (merged[i] + merged[j]) / 2.0
-                    pairs.append((
-                        abs(midpoint - width / 2.0),
-                        midpoint
-                    ))
-
-        if not pairs:
-            return None
-
-        pairs.sort(key=lambda item: item[0])
-        return pairs[0][1]
-
-    # Lower and upper image regions estimate position and heading.
-    bottom_x = centre_at_row(int(height * 0.82))
-    upper_x = centre_at_row(int(height * 0.58))
-
-    if bottom_x is None or upper_x is None:
-        return None
-
-    cross_track_error = (bottom_x - width / 2.0) / (width / 2.0)
-
-    # Positive heading error means the lane moves right towards the top.
-    heading_error = np.arctan2(
-        upper_x - bottom_x,
-        (0.82 - 0.58) * height
-    )
+    else:
+        heading = 0.0
 
     return {
-        "cross_track_error": float(cross_track_error),
-        "heading_error": float(heading_error)
+        "error": float(error),
+        "heading": float(heading),
+        "valid": True
     }
 
+    return None
 
-# def compute_control(detection, stop_requested):
-#     '''
-#     Purpose:
-#     ---
-#     Turn the errors from detect_lane() into the three numbers the vehicle is
-#     driven with, and obey the stop flag.
-
-#     This is where your Task 1B controller and your Task 1A steering geometry
-#     meet: work out one steering angle from the error, then split it into the
-#     two front-wheel angles the joints actually take.
-
-#     Input Arguments:
-#     ---
-#     `detection` :   [ any ]
-#         Whatever detect_lane() returned for this frame.
-
-#     `stop_requested` :  [ bool ]
-#         True while the evaluation is holding the vehicle at a stop point.
-#         This is a LEVEL, not a pulse: it stays True for the whole duration of
-#         the stop and goes False when the wait is over. While it is True the
-#         vehicle must be STATIONARY, so return a speed of 0.0. There is no
-#         stopwatch for you to write and no duration to hard-code.
-
-#     Returns:
-#     ---
-#     `left_angle`, `right_angle` :   [ float ]
-#         The two front-wheel steering angles, in RADIANS, written straight to
-#         the steering joints. The scene's steering joints are POSITIVE TO THE
-#         LEFT. Nothing is clamped for you - the vehicle's own limit is 45
-#         degrees, and commanding past it will not steer any harder.
-
-#     `speed` :   [ float ]
-#         Target velocity for both drive motors, in rad/s. 0.0 holds the
-#         vehicle still.
-
-#     Example call:
-#     ---
-#     left_angle, right_angle, speed = compute_control(detection, stop_requested)
-
-#     REMEMBER:
-#     ---
-#     Keep the loop running while stopped - set the SPEED to zero, not your
-#     program. If you stop reading frames you will not see the flag drop.
-
-#     Sooner or later a frame comes back with nothing usable in it. Holding the
-#     last steering angle, easing off the throttle and stopping dead are all
-#     defensible - doing nothing is not.
-#     '''
-
-#     # ADD YOUR CODE HERE
-
-#     return 0.0, 0.0, 0.0
 
 def compute_control(detection, stop_requested):
-    """Convert camera lane errors into steering and drive commands."""
-    import math
+    '''
+    Purpose:
+    ---
+    Turn the errors from detect_lane() into the three numbers the vehicle is
+    driven with, and obey the stop flag.
 
-    # If the camera cannot see a reliable lane, stop rather than
-    # continuing blindly with zero steering.
-    if detection is None:
+    This is where your Task 1B controller and your Task 1A steering geometry
+    meet: work out one steering angle from the error, then split it into the
+    two front-wheel angles the joints actually take.
+
+    Input Arguments:
+    ---
+    `detection` :   [ any ]
+        Whatever detect_lane() returned for this frame.
+
+    `stop_requested` :  [ bool ]
+        True while the evaluation is holding the vehicle at a stop point.
+        This is a LEVEL, not a pulse: it stays True for the whole duration of
+        the stop and goes False when the wait is over. While it is True the
+        vehicle must be STATIONARY, so return a speed of 0.0. There is no
+        stopwatch for you to write and no duration to hard-code.
+
+    Returns:
+    ---
+    `left_angle`, `right_angle` :   [ float ]
+        The two front-wheel steering angles, in RADIANS, written straight to
+        the steering joints. The scene's steering joints are POSITIVE TO THE
+        LEFT. Nothing is clamped for you - the vehicle's own limit is 45
+        degrees, and commanding past it will not steer any harder.
+
+    `speed` :   [ float ]
+        Target velocity for both drive motors, in rad/s. 0.0 holds the
+        vehicle still.
+
+    Example call:
+    ---
+    left_angle, right_angle, speed = compute_control(detection, stop_requested)
+
+    REMEMBER:
+    ---
+    Keep the loop running while stopped - set the SPEED to zero, not your
+    program. If you stop reading frames you will not see the flag drop.
+
+    Sooner or later a frame comes back with nothing usable in it. Holding the
+    last steering angle, easing off the throttle and stopping dead are all
+    defensible - doing nothing is not.
+    '''
+
+    # ADD YOUR CODE HERE
+        import math
+
+    # Always obey the evaluation stop signal
+    if stop_requested:
         return 0.0, 0.0, 0.0
 
-    e = detection["cross_track_error"]
-    psi = detection["heading_error"]
+    # If detection fails, continue slowly with neutral steering
+    if detection is None or not detection.get("valid", False):
+        return 0.0, 0.0, 1.0
 
-    # Positive steering means left; negative means right.
-    # These are initial gains and must be tested in the simulator.
-    steering_angle = -0.65 * e - 1.8 * psi
+    error = detection["error"]
+    heading = detection["heading"]
 
-    # Vehicle steering limit: 45 degrees.
-    steering_angle = max(
-        -math.radians(45),
-        min(math.radians(45), steering_angle)
-    )
+    # Calculate steering; positive angle means LEFT
+    steering = -0.8 * error - 1.5 * heading
 
-    # Ackermann split using the supplied vehicle dimensions.
+    # Limit steering to +/- 45 degrees
+    limit = math.radians(45)
+    steering = max(-limit, min(limit, steering))
+
+    # Ackermann steering geometry
     wheelbase = 0.120
     track_width = 0.110
     wheel_offset = 0.0275
-    half_track = track_width / 2.0 - wheel_offset
+    half_track = track_width / 2 - wheel_offset
 
-    if abs(steering_angle) < 1e-5:
+    if abs(steering) < 1e-5:
         left_angle = 0.0
         right_angle = 0.0
     else:
-        radius = wheelbase / abs(math.tan(steering_angle))
+        radius = wheelbase / abs(math.tan(steering))
         inner = math.atan2(
             wheelbase, max(0.01, radius - half_track)
         )
@@ -284,21 +277,17 @@ def compute_control(detection, stop_requested):
             wheelbase, radius + half_track
         )
 
-        if steering_angle > 0:  # left turn
+        if steering > 0:
             left_angle = inner
             right_angle = outer
-        else:                    # right turn
+        else:
             left_angle = -outer
             right_angle = -inner
 
-    # The stop signal must always override the drive speed.
-    if stop_requested:
-        return left_angle, right_angle, 0.0
+    speed = 1.0
+    return float(left_angle), float(right_angle), speed
 
-    # Start slowly for safer tuning.
-    speed = 1.2
-
-    return left_angle, right_angle, speed
+    return 0.0, 0.0, 0.0
 
 
 ##############################################################
