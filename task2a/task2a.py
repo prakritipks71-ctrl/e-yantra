@@ -96,19 +96,18 @@ def detect_lane(frame):
     # ADD YOUR CODE HERE
     import math
 
-    # state kept between frames, stored on the function itself
     S = detect_lane.__dict__.setdefault(
         "S", {"side": None, "width": {"near": None, "far": None}})
 
-    REF_X_FRAC = 0.5       # where the vehicle axis is in the image - check this
-    LANE_WIDTH_M = 0.2     # lane spacing from Task 1B
+    REF_X_FRAC = 0.5
+    LANE_WIDTH_M = 0.2
 
     h, w = frame.shape[:2]
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-    yellow = cv2.inRange(hsv, (15, 90, 90), (40, 255, 255))
+    yellow = cv2.inRange(hsv, (15, 60, 60), (45, 255, 255))
     white = cv2.inRange(hsv, (0, 0, 180), (180, 60, 255))
 
-    def peaks(mask, y1, y2, min_px=3):
+    def peaks(mask, y1, y2, min_px=2):
         hist = np.sum(mask[y1:y2, :] > 0, axis=0).astype(np.float32)
         hist = cv2.GaussianBlur(hist.reshape(1, -1), (1, 9), 0).ravel()
         if hist.max() < min_px:
@@ -120,20 +119,20 @@ def detect_lane(frame):
     def band_centre(name, ys, ws, ref):
         side, width = S["side"], S["width"][name]
         if ys and ws:
-            y = min(ys, key=lambda x: abs(x - ref))      # my yellow edge
-            wx = min(ws, key=lambda x: abs(x - y))       # divider next to it
+            y = min(ys, key=lambda x: abs(x - ref))
+            wx = min(ws, key=lambda x: abs(x - y))
             d = wx - y
             ok = abs(d) > 10 and (width is None or 0.5 * width < abs(d) < 1.6 * width)
             if ok and (side is None or np.sign(d) == side):
                 S["side"] = int(np.sign(d))
                 S["width"][name] = abs(d) if width is None else 0.9 * width + 0.1 * abs(d)
-                return (y + wx) / 2                      # MIDDLE of the lane
+                return (y + wx) / 2
         if side is None or width is None:
             return None
-        if ys:                                           # dashed line in a gap
+        if ys:
             y = min(ys, key=lambda x: abs(x - ref))
             return y + side * width / 2
-        if ws:                                           # yellow not visible
+        if ws:
             wx = min(ws, key=lambda x: abs(x - ref))
             return wx - side * width / 2
         return None
@@ -143,15 +142,20 @@ def detect_lane(frame):
     far = (int(h * 0.55), int(h * 0.72))
 
     near_c = band_centre("near", peaks(yellow, *near), peaks(white, *near), ref)
-    if near_c is None:
-        return {"valid": False}
     far_c = band_centre("far", peaks(yellow, *far), peaks(white, *far), ref)
+
+    if near_c is None and far_c is None:
+        return {"valid": False}
+    if near_c is None:
+        near_c = far_c
     if far_c is None:
         far_c = near_c
 
     width_px = S["width"]["near"] or (w * 0.4)
-    e_m = (near_c - ref) / width_px * LANE_WIDTH_M       # + : lane centre is to the right
-    psi = math.atan2(far_c - near_c, h * (0.85 - 0.635)) # + : lane bends to the right
+    # mix near and far centres so the car reacts earlier
+    look_c = 0.5 * near_c + 0.5 * far_c
+    e_m = (look_c - ref) / width_px * LANE_WIDTH_M
+    psi = math.atan2(far_c - near_c, h * (0.85 - 0.635))
 
     return {"valid": True, "e_m": float(e_m), "psi": float(psi)}
 
@@ -208,27 +212,25 @@ def compute_control(detection, stop_requested):
     defensible - doing nothing is not.
     '''
 
-        # ADD YOUR CODE HERE
+    # ADD YOUR CODE HERE
     import math
 
-    K_HEAD, K_CTE = 0.8, 4.0
-    CRUISE, SLOW = 0.8, 0.4
-    MAX_STEER = math.radians(30)
+    K_HEAD, K_CTE = 1.2, 6.0
+    CRUISE, SLOW = 0.5, 0.3
+    MAX_STEER = math.radians(35)
     WHEELBASE, TRACK_WIDTH = 0.120, 0.110
 
     st = compute_control.__dict__.setdefault("st", {"steer": 0.0})
 
     if detection and detection.get("valid"):
         e, psi = detection["e_m"], detection["psi"]
-        # steering is positive to the LEFT, so "lane is to the right" -> negative
         delta = -(K_HEAD * psi + math.atan(K_CTE * e / (CRUISE * 0.1 + 0.15)))
         delta = max(-MAX_STEER, min(MAX_STEER, delta))
-        st["steer"] = 0.7 * st["steer"] + 0.3 * delta
+        st["steer"] = 0.3 * st["steer"] + 0.7 * delta
         speed = CRUISE
     else:
-        speed = SLOW                    # lane lost: keep last steering, slow down
+        speed = SLOW
 
-    # Ackermann split (swap in your Task 1A function if you like)
     d = st["steer"]
     if abs(d) < 1e-6:
         left_angle = right_angle = 0.0
@@ -242,7 +244,6 @@ def compute_control(detection, stop_requested):
         speed = 0.0
 
     return float(left_angle), float(right_angle), float(speed)
-    return 0.0, 0.0, 0.0
 
 
 ##############################################################
