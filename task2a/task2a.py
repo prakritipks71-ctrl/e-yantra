@@ -53,9 +53,6 @@ STOP_SIGNAL = 'NV_stop'
 ##############################################################
 ############### ADD YOUR IMPLEMENTATION HERE #################
 ##############################################################
-LAST_WHITE_X = None
-LAST_WHITE_ERROR = 0.0
-LAST_WHITE_HEADING = 0.0
 
 def detect_lane(frame):
     '''
@@ -97,86 +94,66 @@ def detect_lane(frame):
     '''
 
     # ADD YOUR CODE HERE
-    import cv2
-    import numpy as np
+    import math
 
-    global LAST_WHITE_X, LAST_WHITE_ERROR, LAST_WHITE_HEADING
+    # state kept between frames, stored on the function itself
+    S = detect_lane.__dict__.setdefault(
+        "S", {"side": None, "width": {"near": None, "far": None}})
 
-    height, width = frame.shape[:2]
+    REF_X_FRAC = 0.5       # where the vehicle axis is in the image - check this
+    LANE_WIDTH_M = 0.2     # lane spacing from Task 1B
 
+    h, w = frame.shape[:2]
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    yellow = cv2.inRange(hsv, (15, 90, 90), (40, 255, 255))
+    white = cv2.inRange(hsv, (0, 0, 180), (180, 60, 255))
 
-    # Detect white road markings
-    lower_white = np.array([0, 0, 175], dtype=np.uint8)
-    upper_white = np.array([180, 75, 255], dtype=np.uint8)
-    mask = cv2.inRange(hsv, lower_white, upper_white)
+    def peaks(mask, y1, y2, min_px=3):
+        hist = np.sum(mask[y1:y2, :] > 0, axis=0).astype(np.float32)
+        hist = cv2.GaussianBlur(hist.reshape(1, -1), (1, 9), 0).ravel()
+        if hist.max() < min_px:
+            return []
+        xs = np.where(hist >= max(min_px, 0.3 * hist.max()))[0]
+        groups = np.split(xs, np.where(np.diff(xs) > 6)[0] + 1)
+        return [float(np.average(g, weights=hist[g])) for g in groups if len(g) >= 2]
 
-    # Ignore the sky and focus on road markings
-    near_y1, near_y2 = int(height * 0.72), int(height * 0.94)
-    far_y1, far_y2 = int(height * 0.48), int(height * 0.68)
-
-    def find_line_x(y1, y2, reference=None):
-        roi = mask[y1:y2, :]
-        histogram = np.sum(roi > 0, axis=0).astype(np.float32)
-
-        histogram = cv2.GaussianBlur(
-            histogram.reshape(1, -1), (1,  nine := 9), 0
-        ).ravel()
-
-        threshold = max(2, histogram.max() * 0.30)
-        xs = np.where(histogram >= threshold)[0]
-
-        if len(xs) == 0:
+    def band_centre(name, ys, ws, ref):
+        side, width = S["side"], S["width"][name]
+        if ys and ws:
+            y = min(ys, key=lambda x: abs(x - ref))      # my yellow edge
+            wx = min(ws, key=lambda x: abs(x - y))       # divider next to it
+            d = wx - y
+            ok = abs(d) > 10 and (width is None or 0.5 * width < abs(d) < 1.6 * width)
+            if ok and (side is None or np.sign(d) == side):
+                S["side"] = int(np.sign(d))
+                S["width"][name] = abs(d) if width is None else 0.9 * width + 0.1 * abs(d)
+                return (y + wx) / 2                      # MIDDLE of the lane
+        if side is None or width is None:
             return None
+        if ys:                                           # dashed line in a gap
+            y = min(ys, key=lambda x: abs(x - ref))
+            return y + side * width / 2
+        if ws:                                           # yellow not visible
+            wx = min(ws, key=lambda x: abs(x - ref))
+            return wx - side * width / 2
+        return None
 
-        groups = np.split(xs, np.where(np.diff(xs) > max(8, width // 50))[0] + 1)
-        peaks = [
-            float(np.mean(group))
-            for group in groups
-            if len(group) >= 2
-        ]
+    ref = REF_X_FRAC * w
+    near = (int(h * 0.75), int(h * 0.95))
+    far = (int(h * 0.55), int(h * 0.72))
 
-        if not peaks:
-            return None
+    near_c = band_centre("near", peaks(yellow, *near), peaks(white, *near), ref)
+    if near_c is None:
+        return {"valid": False}
+    far_c = band_centre("far", peaks(yellow, *far), peaks(white, *far), ref)
+    if far_c is None:
+        far_c = near_c
 
-        if reference is not None:
-            return min(peaks, key=lambda x: abs(x - reference))
+    width_px = S["width"]["near"] or (w * 0.4)
+    e_m = (near_c - ref) / width_px * LANE_WIDTH_M       # + : lane centre is to the right
+    psi = math.atan2(far_c - near_c, h * (0.85 - 0.635)) # + : lane bends to the right
 
-        # First frame: choose a visible marking near the camera centre
-        return min(peaks, key=lambda x: abs(x - width / 2))
-
-    near_x = find_line_x(near_y1, near_y2, LAST_WHITE_X)
-
-    if near_x is None:
-        return {
-            "cross_track_error": LAST_WHITE_ERROR,
-            "heading_error": LAST_WHITE_HEADING,
-            "valid": False
-        }
-
-    far_x = find_line_x(far_y1, far_y2, near_x)
-
-    if far_x is None:
-        far_x = near_x
-
-    # Error relative to the centre of the camera image
-    error = (near_x - width / 2) / (width / 2)
-
-    # Direction of the white line
-    heading = np.arctan2(
-        far_x - near_x,
-        (0.82 - 0.58) * height
-    )
-
-    LAST_WHITE_X = near_x
-    LAST_WHITE_ERROR = float(error)
-    LAST_WHITE_HEADING = float(heading)
-
-    return {
-        "cross_track_error": float(error),
-        "heading_error": float(heading),
-        "valid": True
-    }
+    return {"valid": True, "e_m": float(e_m), "psi": float(psi)}
 
 
 
@@ -231,47 +208,38 @@ def compute_control(detection, stop_requested):
     defensible - doing nothing is not.
     '''
 
-    # ADD YOUR CODE HERE
+        # ADD YOUR CODE HERE
     import math
 
-    if detection is not None:
-        error = detection.get("cross_track_error", 0.0)
-        heading = detection.get("heading_error", 0.0)
-        valid = detection.get("valid", True)
+    K_HEAD, K_CTE = 0.8, 4.0
+    CRUISE, SLOW = 0.8, 0.4
+    MAX_STEER = math.radians(30)
+    WHEELBASE, TRACK_WIDTH = 0.120, 0.110
+
+    st = compute_control.__dict__.setdefault("st", {"steer": 0.0})
+
+    if detection and detection.get("valid"):
+        e, psi = detection["e_m"], detection["psi"]
+        # steering is positive to the LEFT, so "lane is to the right" -> negative
+        delta = -(K_HEAD * psi + math.atan(K_CTE * e / (CRUISE * 0.1 + 0.15)))
+        delta = max(-MAX_STEER, min(MAX_STEER, delta))
+        st["steer"] = 0.7 * st["steer"] + 0.3 * delta
+        speed = CRUISE
     else:
-        error = LAST_WHITE_ERROR
-        heading = LAST_WHITE_HEADING
-        valid = False
+        speed = SLOW                    # lane lost: keep last steering, slow down
 
-    # Keep steering responsive but smooth
-    steering = -0.25 * error - 0.65 * heading
-    steering = max(-math.radians(35),
-                   min(math.radians(35), steering))
-
-    # Ackermann steering geometry
-    wheelbase = 0.120
-    track_width = 0.110
-
-    if abs(steering) < 1e-5:
-        left_angle = 0.0
-        right_angle = 0.0
+    # Ackermann split (swap in your Task 1A function if you like)
+    d = st["steer"]
+    if abs(d) < 1e-6:
+        left_angle = right_angle = 0.0
     else:
-        radius = wheelbase / math.tan(abs(steering))
-        inner = math.atan(wheelbase / max(0.001, radius - track_width / 2))
-        outer = math.atan(wheelbase / (radius + track_width / 2))
+        r = WHEELBASE / math.tan(abs(d))
+        inner = math.atan(WHEELBASE / max(1e-3, r - TRACK_WIDTH / 2))
+        outer = math.atan(WHEELBASE / (r + TRACK_WIDTH / 2))
+        left_angle, right_angle = (inner, outer) if d > 0 else (-outer, -inner)
 
-        if steering > 0:
-            left_angle = inner
-            right_angle = outer
-        else:
-            left_angle = -outer
-            right_angle = -inner
-
-    # The stop signal must always stop the vehicle
     if stop_requested:
-        return float(left_angle), float(right_angle), 0.0
-
-    speed = 0.0 if not valid else 0.8
+        speed = 0.0
 
     return float(left_angle), float(right_angle), float(speed)
     return 0.0, 0.0, 0.0
