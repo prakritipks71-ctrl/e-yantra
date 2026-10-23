@@ -27,7 +27,6 @@
 
 
 ####################### IMPORT MODULES #######################
-import math
 import sys
 import time
 
@@ -35,7 +34,6 @@ import cv2
 import numpy as np
 
 from coppeliasim_zmqremoteapi_client import RemoteAPIClient
-from task1a.ackermann_steering import TRACK_WIDTH, WHEELBASE
 ##############################################################
 
 
@@ -98,7 +96,44 @@ STOP_SIGNAL = 'NV_stop'
 #     # ADD YOUR CODE HERE
 
 #     return None
-
+def detect_lane(frame):
+    '''
+    Purpose:
+    ---
+    Process a single camera frame to calculate cross-track error and heading error.
+    '''
+    height, width = frame.shape[:2]
+    
+    # 1. Convert to HSV and isolate lane markings using your Task 1C thresholds
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    
+    # NOTE: Adjust these lower and upper bounds if needed based on your Task 1C tuner
+    lower_bound = np.array([0, 0, 200], dtype=np.uint8)   # Example white/bright lane threshold
+    upper_bound = np.array([180, 50, 255], dtype=np.uint8)
+    mask = cv2.inRange(hsv, lower_bound, upper_bound)
+    
+    # 2. Find lane pixels (e.g., using non-zero columns or contours at the bottom/middle of the view)
+    non_zero_x = np.where(mask > 0)[1]
+    
+    if len(non_zero_x) > 0:
+        lane_center_x = np.mean(non_zero_x)
+    else:
+        lane_center_x = width / 2.0  # Fallback to center if nothing is seen
+        
+    # 3. Calculate Cross-Track Error (distance from the center of the camera frame to the lane center)
+    frame_center_x = width / 2.0
+    cross_track_error = (lane_center_x - frame_center_x) / (width / 2.0)  # normalized value
+    
+    # 4. Calculate Heading Error (approximate slope/angle offset based on lane shift)
+    heading_error = 0.0  # Keep 0.0 if relying primarily on cross-track error, or add your line-fit slope here
+    
+    # Package into a dictionary to pass to compute_control()
+    detection = {
+        'cross_track_error': cross_track_error,
+        'heading_error': heading_error
+    }
+    
+    return detection
 
 # def compute_control(detection, stop_requested):
 #     '''
@@ -152,57 +187,12 @@ STOP_SIGNAL = 'NV_stop'
 #     # ADD YOUR CODE HERE
 
 #     return 0.0, 0.0, 0.0
-
-##############################################################
-############### ADD YOUR IMPLEMENTATION HERE #################
-##############################################################
-
-def detect_lane(frame):
-    '''
-    Purpose:
-    ---
-    Process a single camera frame to calculate cross-track error and heading error.
-    '''
-    height, width = frame.shape[:2]
-    
-    # 1. Convert to HSV and isolate lane markings using your Task 1C thresholds
-    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-    
-    # NOTE: Adjust these lower and upper bounds if needed based on your Task 1C tuner
-    lower_bound = np.array([0, 0, 200], dtype=np.uint8)   # Example white/bright lane threshold
-    upper_bound = np.array([180, 50, 255], dtype=np.uint8)
-    mask = cv2.inRange(hsv, lower_bound, upper_bound)
-    
-    # 2. Find lane pixels (e.g., using non-zero columns or contours at the bottom/middle of the view)
-    non_zero_x = np.where(mask > 0)[1]
-    
-    if len(non_zero_x) > 0:
-        lane_center_x = np.mean(non_zero_x)
-    else:
-        lane_center_x = width / 2.0  # Fallback to center if nothing is seen
-        
-    # 3. Calculate Cross-Track Error (distance from the center of the camera frame to the lane center)
-    frame_center_x = width / 2.0
-    cross_track_error = (lane_center_x - frame_center_x) / (width / 2.0)  # normalized value
-    
-    # 4. Calculate Heading Error (approximate slope/angle offset based on lane shift)
-    heading_error = 0.0  # Keep 0.0 if relying primarily on cross-track error, or add your line-fit slope here
-    
-    # Package into a dictionary to pass to compute_control()
-    detection = {
-        'cross_track_error': cross_track_error,
-        'heading_error': heading_error
-    }
-    
-    return detection
-
-
 def compute_control(detection, stop_requested):
     '''
     Purpose:
     ---
-    Turn errors into steering angles using your controller and Ackermann geometry, 
-    and obey the stop flag.
+    Turn errors into steering angles using your Task 1B controller and Task 1A 
+    Ackermann geometry, while obeying the stop flag.
     '''
     if detection is None:
         return 0.0, 0.0, 0.0
@@ -210,49 +200,26 @@ def compute_control(detection, stop_requested):
     e = detection.get('cross_track_error', 0.0)
     psi = detection.get('heading_error', 0.0)
     
-    # 1. TASK 1B CONTROLLER (Proportional / Stanley control law)
-    # Tune your gain K (e.g., try 0.5 to 1.5) to make the vehicle turn actively
-    K_p = 0.8
-    steering_angle = - (K_p * e + psi)  # Negative sign ensures correct steering direction
+    # 1. TASK 1B: Compute virtual steering angle using your PID or Stanley controller
+    # Example (Stanley): steering_angle = K_e * e + K_psi * psi
+    steering_angle = 0.0  # <-- Replace with your Task 1B controller formula
     
-    # Clamp steering angle to vehicle physical limit (45 degrees / ~0.785 radians)
+    # Clamp steering angle to vehicle limits (~0.78 radians / 45 degrees)
     steering_angle = max(-0.785, min(0.785, steering_angle))
     
-    # 2. TASK 1A ACKERMANN SPLIT
-    # Implement your geometry calculations here to convert single steering_angle into left and right wheels.
-    # Here is the direct geometric conversion using the vehicle constants:
-    # WHEELBASE = 0.120, TRACK_WIDTH = 0.110, WHEEL_OFFSET = 0.0275
-    if abs(steering_angle) < 1e-5:
-        left_angle = 0.0
-        right_angle = 0.0
-    else:
-        # Turning radius from virtual center
-        R = WHEELBASE / math.tan(abs(steering_angle))
-        if steering_angle > 0:  # Turning left
-            left_angle = math.atan(WHEELBASE / (R - TRACK_WIDTH / 2.0))
-            right_angle = math.atan(WHEELBASE / (R + TRACK_WIDTH / 2.0))
-        else:  # Turning right
-            left_angle = -math.atan(WHEELBASE / (R + TRACK_WIDTH / 2.0))
-            right_angle = -math.atan(WHEELBASE / (R - TRACK_WIDTH / 2.0))
-            
+    # 2. TASK 1A: Split single steering angle into left and right front-wheel angles (in radians)
+    # TODO: Call your Task 1A Ackermann function here
+    # left_angle, right_angle = ackermann_wheel_angles(steering_angle)
+    left_angle, right_angle = 0.0, 0.0  # <-- Replace with your function outputs
+    
     # 3. STOP RULE: If simulation tells you to stop, keep steering active but set speed to 0.0
     if stop_requested:
         return left_angle, right_angle, 0.0
         
-    # 4. NORMAL DRIVE: Set cruise speed (e.g., 1.5 to 2.0 rad/s)
-    speed = 2.0
+    # 4. NORMAL DRIVE: Set your tested cruising speed (e.g., 2.0 rad/s)
+    speed = 2.0 
     
     return left_angle, right_angle, speed
-
-
-# ------------------------------------------------------------------
-# Add any helper functions and global variables you need below this
-# comment, and keep them ABOVE the "END OF YOUR IMPLEMENTATION" line.
-# ------------------------------------------------------------------
-
-##############################################################
-############## END OF YOUR IMPLEMENTATION ####################
-##############################################################
 
 ##############################################################
 ############## END OF YOUR IMPLEMENTATION ####################
