@@ -27,6 +27,7 @@
 
 
 ####################### IMPORT MODULES #######################
+import math
 import sys
 import time
 
@@ -34,6 +35,7 @@ import cv2
 import numpy as np
 
 from coppeliasim_zmqremoteapi_client import RemoteAPIClient
+from task1a.ackermann_steering import TRACK_WIDTH, WHEELBASE
 ##############################################################
 
 
