@@ -97,31 +97,38 @@ STOP_SIGNAL = 'NV_stop'
 
 #     return None
 def detect_lane(frame):
-    # 1. Apply your Task 1C preprocessing & HSV masking
+    '''
+    Purpose:
+    ---
+    Process a single camera frame to calculate cross-track error and heading error.
+    '''
+    height, width = frame.shape[:2]
+    
+    # 1. Apply your Task 1C color thresholding (HSV) and masking
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    
+    # TODO: Use your tuned HSV lower and upper bounds from Task 1C here
     # lower_bound = np.array([...], dtype=np.uint8)
     # upper_bound = np.array([...], dtype=np.uint8)
     # mask = cv2.inRange(hsv, lower_bound, upper_bound)
     
-    # 2. Find lane boundaries / center using your Task 1C approach (e.g., contours or columns)
-    # center_x = ... (your detected lane center pixel)
+    # 2. Extract lane center / position (e.g., via contours, columns, or sliding windows)
+    # center_x = ... 
     
-    # 3. Calculate Cross-Track Error (distance between frame center and lane center)
-    height, width = frame.shape[:2]
-    frame_center_x = width / 2.0
+    # 3. Calculate Cross-Track Error (distance from frame center to lane center)
+    # frame_center_x = width / 2.0
+    # cross_track_error = (center_x - frame_center_x) # scale or convert to meters if needed
+    cross_track_error = 0.0  # <-- Replace with your calculated lateral error
     
-    # Assuming center_x is found, compute lateral error (in pixels, or converted to meters)
-    # cross_track_error = (center_x - frame_center_x) / scale_factor
-    cross_track_error = 0.0  # Replace with your calculated lateral error
+    # 4. Calculate Heading Error (slope/angle of the lane curve)
+    heading_error = 0.0      # <-- Replace with your calculated heading/slope error
     
-    # 4. Calculate Heading Error (slope/angle of the lane curve relative to the vehicle axis)
-    heading_error = 0.0      # Replace with your calculated heading/slope error
-    
-    # Return a dictionary containing both errors for the controller
+    # Package into a dictionary to pass straight to compute_control()
     detection = {
         'cross_track_error': cross_track_error,
         'heading_error': heading_error
     }
+    
     return detection
 
 # def compute_control(detection, stop_requested):
@@ -178,29 +185,36 @@ def detect_lane(frame):
 #     return 0.0, 0.0, 0.0
 
 def compute_control(detection, stop_requested):
+    '''
+    Purpose:
+    ---
+    Turn errors into steering angles using your Task 1B controller and Task 1A 
+    Ackermann geometry, while obeying the stop flag.
+    '''
     if detection is None:
         return 0.0, 0.0, 0.0
         
     e = detection.get('cross_track_error', 0.0)
     psi = detection.get('heading_error', 0.0)
     
-    # 1. TASK 1B: Compute target virtual steering angle using your controller (Stanley or PID)
-    # Example for Stanley: steering_angle = K_e * e + K_psi * psi
-    steering_angle = 0.0  # Replace with your Task 1B control law formula
+    # 1. TASK 1B: Compute virtual steering angle using your PID or Stanley controller
+    # Example (Stanley): steering_angle = K_e * e + K_psi * psi
+    steering_angle = 0.0  # <-- Replace with your Task 1B controller formula
     
-    # Clamp steering angle to vehicle limits (max 45 degrees / ~0.78 radians)
+    # Clamp steering angle to vehicle limits (~0.78 radians / 45 degrees)
     steering_angle = max(-0.785, min(0.785, steering_angle))
     
-    # 2. TASK 1A: Split into left and right front-wheel angles using your Ackermann function
+    # 2. TASK 1A: Split single steering angle into left and right front-wheel angles (in radians)
+    # TODO: Call your Task 1A Ackermann function here
     # left_angle, right_angle = ackermann_wheel_angles(steering_angle)
-    left_angle, right_angle = 0.0, 0.0  # Replace with your Task 1A function call
+    left_angle, right_angle = 0.0, 0.0  # <-- Replace with your function outputs
     
-    # 3. STOP RULE: If simulation says stop, keep steering active but set speed to 0.0
+    # 3. STOP RULE: If simulation tells you to stop, keep steering active but set speed to 0.0
     if stop_requested:
         return left_angle, right_angle, 0.0
         
     # 4. NORMAL DRIVE: Set your tested cruising speed (e.g., 2.0 rad/s)
-    speed = 2.0
+    speed = 2.0 
     
     return left_angle, right_angle, speed
 ##############################################################
