@@ -94,91 +94,104 @@ def detect_lane(frame):
     '''
 
     # ADD YOUR CODE HERE
-    
     import cv2
     import numpy as np
 
     height, width = frame.shape[:2]
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
 
-    # Detect yellow outer boundary separately
+    # Detect yellow boundaries and white dashed divider separately
     yellow_mask = cv2.inRange(
         hsv,
         np.array([15, 65, 70], dtype=np.uint8),
         np.array([40, 255, 255], dtype=np.uint8)
     )
-
-    # Detect white dashed divider separately
     white_mask = cv2.inRange(
         hsv,
         np.array([0, 0, 150], dtype=np.uint8),
         np.array([180, 80, 255], dtype=np.uint8)
     )
 
-    # Examine two lower image bands to estimate lane position
-    def find_marking(mask, y_start, y_end):
-        roi = mask[y_start:y_end, :]
-        histogram = np.sum(roi > 0, axis=0).astype(float)
+    # Analyse a lower and upper strip of the image
+    def get_peaks(mask, y1, y2):
+        roi = mask[y1:y2, :]
+        hist = np.sum(roi > 0, axis=0).astype(float)
+        hist = np.convolve(hist, np.ones( nine := 9) / nine, mode="same")
 
-        # Smooth isolated pixels
-        histogram = np.convolve(
-            histogram, np.ones(9) / 9.0, mode="same"
-        )
+        if hist.max() < 2:
+            return []
 
-        if histogram.max() < 1:
-            return None
+        threshold = max(2.0, hist.max() * 0.25)
+        xs = np.where(hist >= threshold)[0]
+        if len(xs) == 0:
+            return []
 
-        # Find the strongest marking location
-        x = int(np.argmax(histogram))
+        # Group adjacent pixels into markings
+        groups = np.split(xs, np.where(np.diff(xs) > max(8, width // 40))[0] + 1)
+        return [
+            float(np.mean(g))
+            for g in groups
+            if len(g) > 0
+        ]
 
-        # Reject very weak detections
-        if histogram[x] < 2:
-            return None
+    near_y1, near_y2 = int(height * 0.70), int(height * 0.94)
+    far_y1, far_y2 = int(height * 0.48), int(height * 0.68)
 
-        return float(x)
+    yellow_near = get_peaks(yellow_mask, near_y1, near_y2)
+    white_near = get_peaks(white_mask, near_y1, near_y2)
+    yellow_far = get_peaks(yellow_mask, far_y1, far_y2)
+    white_far = get_peaks(white_mask, far_y1, far_y2)
 
-    # Yellow boundary and white divider at two distances
-    y_near_start = int(height * 0.76)
-    y_near_end = int(height * 0.94)
-    y_far_start = int(height * 0.58)
-    y_far_end = int(height * 0.74)
+    # Build possible lane-boundary pairs.
+    # The outer lane is yellow-to-white; the inner lane is white-to-yellow.
+    candidates = []
 
-    yellow_near = find_marking(
-        yellow_mask, y_near_start, y_near_end
-    )
-    white_near = find_marking(
-        white_mask, y_near_start, y_near_end
-    )
+    for y in yellow_near:
+        for w in white_near:
+            separation = abs(y - w)
+            if width * 0.08 < separation < width * 0.60:
+                candidates.append((min(y, w), max(y, w)))
 
-    yellow_far = find_marking(
-        yellow_mask, y_far_start, y_far_end
-    )
-    white_far = find_marking(
-        white_mask, y_far_start, y_far_end
-    )
-
-    # If both lane boundaries aren't visible, avoid a false estimate
-    if yellow_near is None or white_near is None:
+    # Need two visible boundaries to estimate a lane centre
+    if not candidates:
         return {
             "error": 0.0,
             "heading": 0.0,
             "valid": False
         }
 
-    # Lane centre is halfway between the two markings
-    lane_near = (yellow_near + white_near) / 2.0
+    # Select the plausible lane centre nearest the camera image centre.
+    # This supports either lane, provided the correct pair is visible.
+    candidates.sort(
+        key=lambda pair: abs((pair[0] + pair[1]) / 2.0 - width / 2.0)
+    )
+    left_mark, right_mark = candidates[0]
+    lane_near = (left_mark + right_mark) / 2.0
 
-    # Estimate heading using the farther lane markings
-    if yellow_far is not None and white_far is not None:
-        lane_far = (yellow_far + white_far) / 2.0
+    # Estimate heading using markings in the upper image region
+    far_candidates = []
+    for y in yellow_far:
+        for w in white_far:
+            separation = abs(y - w)
+            if width * 0.08 < separation < width * 0.60:
+                far_candidates.append((min(y, w), max(y, w)))
+
+    if far_candidates:
+        far_candidates.sort(
+            key=lambda pair: abs(
+                (pair[0] + pair[1]) / 2.0 - lane_near
+            )
+        )
+        lane_far = (
+            far_candidates[0][0] + far_candidates[0][1]
+        ) / 2.0
         heading = np.arctan2(
             lane_far - lane_near,
-            (0.85 - 0.66) * height
+            (0.59 - 0.82) * height
         )
     else:
         heading = 0.0
 
-    # Normalised lateral error
     error = (lane_near - width / 2.0) / (width / 2.0)
 
     return {
@@ -186,6 +199,7 @@ def detect_lane(frame):
         "heading": float(heading),
         "valid": True
     }
+
 
 
 
