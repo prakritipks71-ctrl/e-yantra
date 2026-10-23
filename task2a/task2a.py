@@ -326,6 +326,7 @@ def main():
             frame = read_frame(sim, handles)
             if frame is None:
                 continue
+            cv2.imwrite("frame.png", frame)
             frames += 1
 
             # getInt32Signal() returns None until the signal is first set, so
